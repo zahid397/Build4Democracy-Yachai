@@ -66,7 +66,10 @@ def get_gemini_analysis(text_to_analyze):
         logging.error(f"Gemini API কনফিগারেশন ত্রুটি: {e}")
         return None
 
-    model = genai.GenerativeModel('gemini-1.5-pro-latest')
+    # ============== মডেল পরিবর্তন করা হয়েছে ==============
+    model = genai.GenerativeModel('gemini-2.0-flash-lite')
+    # ==================================================
+    
     prompt = f"""
     তুমি 'যাচাই' নামের একজন AI ফ্যাক্ট-চেকার। তোমার কাজ বাংলাদেশের নির্বাচন সম্পর্কিত ভুল তথ্য শনাক্ত করা।
     নিম্নলিখিত টেক্সটটি বিশ্লেষণ করো: "{text_to_analyze}"
@@ -233,7 +236,7 @@ if page == "🔍 নাগরিক পোর্টাল":
                         "verdict": verdict,
                         "justification": justification,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "final_verdict": None
+                        "final_verdi": None
                     }
                     
                     try:
@@ -302,47 +305,53 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
             st.subheader("✅ একটি রিপোর্ট যাচাই করুন:")
             
             # শুধুমাত্র পেন্ডিং আইটেমগুলো থেকে সিলেক্ট করার অপশন
-            pending_texts = df_display[df_display["final_verdict"].isna()]["text"].tolist()
+            pending_texts = df_display[df_display["final_verdi"].isna()]["text"].tolist()
             
             if not pending_texts:
                 st.success("🎉 সকল রিপোর্ট যাচাই করা হয়েছে!")
             else:
                 selected_text = st.selectbox("রিপোর্ট নির্বাচন করুন (শুধুমাত্র পেন্ডিং):", pending_texts)
                 
-                selected_index = df[df["text"] == selected_text].index[0]
-                selected_row = df.loc[selected_index]
-
-                st.markdown(f"**রিপোর্ট:** `{selected_row['text']}`")
-                st.markdown(f"**AI ভার্ডিক্ট:** `{selected_row['verdict']}` (স্কোর: `{selected_row.get('score', 'N/A')}`%)")
-                st.markdown(f"**AI ব্যাখ্যা:** *{selected_row.get('justification', 'N/A')}*")
+                selected_index_list = df[df["text"] == selected_text].index
                 
-                status = st.radio(
-                    "ফ্যাক্ট-চেক ফলাফল:", 
-                    ["সত্য", "বিভ্রান্তিকর", "মিথ্যা"], 
-                    key=f"status_{selected_index}",
-                    horizontal=True
-                )
+                if not selected_index_list.empty:
+                    selected_index = selected_index_list[0]
+                    selected_row = df.loc[selected_index]
 
-                if st.button("ফাইনাল ট্যাগ করুন ✅", type="primary"):
-                    df.loc[selected_index, "final_verdict"] = status
-                    save_data(df)
-                    st.cache_data.clear()
+                    st.markdown(f"**রিপোর্ট:** `{selected_row['text']}`")
+                    st.markdown(f"**AI ভার্ডিক্ট:** `{selected_row.get('verdict', 'N/A')}` (স্কোর: `{selected_row.get('score', 'N/A')}`%)")
+                    st.markdown(f"**AI ব্যাখ্যা:** *{selected_row.get('justification', 'N/A')}*")
                     
-                    logging.info(f"অ্যাডমিন রিপোর্ট #{selected_index} কে '{status}' হিসেবে ট্যাগ করেছেন।")
-                    
-                    if status == "মিথ্যা":
-                        alert_msg = (
-                            f"🚨 <b>ভুয়া তথ্য শনাক্ত! (যাচাইকৃত)</b> 🚨\n\n"
-                            f"<b>তথ্য:</b>\n<i>{selected_row['text']}</i>\n\n"
-                            f"<b>সিদ্ধান্ত:</b> ❌ {status}\n\n"
-                            f"<i>#Build4Democracy #YachaiBot</i>"
-                        )
-                        if send_alert(alert_msg):
-                            logging.info(f"রিপোর্ট #{selected_index} এর জন্য অ্যালার্ট পাঠানো হয়েছে।")
-                    else:
-                        st.success(f"✅ '{status}' হিসেবে সংরক্ষিত!")
-                    
-                    st.rerun()
+                    status = st.radio(
+                        "ফ্যাক্ট-চেক ফলাফল:", 
+                        ["সত্য", "বিভ্রান্তিকর", "মিথ্যা"], 
+                        key=f"status_{selected_index}",
+                        horizontal=True
+                    )
+
+                    if st.button("ফাইনাল ট্যাগ করুন ✅", type="primary"):
+                        df.loc[selected_index, "final_verdict"] = status
+                        save_data(df)
+                        st.cache_data.clear()
+                        
+                        logging.info(f"অ্যাডমিন রিপোর্ট #{selected_index} কে '{status}' হিসেবে ট্যাগ করেছেন।")
+                        
+                        if status == "মিথ্যা":
+                            alert_msg = (
+                                f"🚨 <b>ভুয়া তথ্য শনাক্ত! (যাচাইকৃত)</b> 🚨\n\n"
+                                f"<b>তথ্য:</b>\n<i>{selected_row['text']}</i>\n\n"
+                                f"<b>সিদ্ধান্ত:</b> ❌ {status}\n\n"
+                                f"<i>#Build4Democracy #YachaiBot</i>"
+                            )
+                            if send_alert(alert_msg):
+                                logging.info(f"রিপোর্ট #{selected_index} এর জন্য অ্যালার্ট পাঠানো হয়েছে।")
+                        else:
+                            st.success(f"✅ '{status}' হিসেবে সংরক্ষিত!")
+                        
+                        st.rerun()
+                else:
+                    st.error("নির্বাচিত টেক্সটটি খুঁজে পাওয়া যায়নি। অনুগ্রহ করে রিলোড করুন।")
+
 
     elif password != "":
         st.sidebar.error("❌ ভুল পাসওয়ার্ড!")
