@@ -1,0 +1,5 @@
+streamlit>=1.28.0
+pandas
+requests
+google-generativeai>=0.3.0
+python-telegram-bot>=20.0
