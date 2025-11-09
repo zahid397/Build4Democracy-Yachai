@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 import matplotlib.pyplot as plt # 👈 চার্ট লাইব্রেরি
 from fpdf import FPDF # 👈 PDF লাইব্রেরি
-import sqlite3 # 👈 তোমার SQLite ইম্পোর্ট
+import sqlite3 # 👈 তোমার ফাইনাল SQLite ইম্পোর্ট
 import shutil # 👈 তোমার ব্যাকআপ ইম্পোর্ট
 
 # --- 1. পেজ কনফিগারেশন এবং লগিং সেটআপ ---
@@ -64,25 +64,28 @@ GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")
 BOT_TOKEN = st.secrets.get("bot_token", "YOUR_BOT_TOKEN")
 CHAT_ID = st.secrets.get("chat_id", "YOUR_CHAT_ID")
 ADMIN_PASS = st.secrets.get("ADMIN_PASS", "demo123")
-# DATABASE_URL -এর আর প্রয়োজন নেই
+
 
 # =====================================================
-# 🧱 DATABASE LAYER (তোমার নতুন SQLite কোড)
+# 🧱 DATABASE LAYER (তোমার ফাইনাল ফিক্সড SQLite সিস্টেম v5.8)
 # =====================================================
-DB_PATH = "data.db"  # File stored permanently (app restarts won't delete it *on local*)
+DB_PATH = "data.db"  # File stored permanently
 
+# Always keep one live connection for Streamlit session
 @st.cache_resource
 def get_db_connection():
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        logging.info("✅ Local SQLite database connected successfully.")
-        # স্ট্যাটাস এখন সাইডবারে দেখাবে
+        conn.execute("PRAGMA journal_mode=WAL;")  # better concurrency
+        logging.info("✅ SQLite Connected (Persistent Mode)")
+        st.sidebar.success("🧠 Persistent Memory Active (SQLite)")
         return conn
     except Exception as e:
         st.error(f"❌ Database connection failed: {e}")
         logging.error(f"DB Connect Error: {e}")
         st.stop()
 
+# Initialize table once
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
@@ -98,10 +101,10 @@ def init_db():
         )
     """)
     conn.commit()
-    c.close()
-    conn.close()
-    logging.info("✅ Table 'reports' initialized successfully.")
+    # conn.close() - @st.cache_resource কানেকশন খোলা রাখে
+    logging.info("🧠 Table 'reports' initialized successfully.")
 
+# Insert data safely (don’t close conn!)
 def insert_report(text, score, verdict, justification):
     conn = get_db_connection()
     c = conn.cursor()
@@ -110,18 +113,14 @@ def insert_report(text, score, verdict, justification):
         VALUES (?, ?, ?, ?, ?)
     """, (text, score, verdict, justification, None))
     conn.commit()
-    c.close()
-    conn.close()
-    logging.info(f"📝 New report inserted: {verdict}")
+    c.close() # কার্সর বন্ধ করা
+    logging.info(f"📝 Report inserted successfully: {verdict}")
 
-# =====================================================
-# 🧠 তোমার নতুন পার্মানেন্ট মেমোরি ক্যাশ (v5.7)
-# =====================================================
-@st.cache_data(ttl=None, persist=True)
+@st.cache_data(ttl=None, persist=True) # তোমার পার্মানেন্ট মেমোরি ক্যাশ
 def fetch_all_reports():
     conn = get_db_connection()
     df = pd.read_sql_query("SELECT * FROM reports ORDER BY timestamp DESC", conn)
-    conn.close()
+    # conn.close() - @st.cache_resource কানেকশন খোলা রাখে
     return df
 
 def update_verdict(report_id, verdict):
@@ -129,15 +128,15 @@ def update_verdict(report_id, verdict):
     c = conn.cursor()
     c.execute("UPDATE reports SET final_verdict=? WHERE id=?", (verdict, report_id))
     conn.commit()
-    c.close()
-    conn.close()
+    c.close() # কার্সর বন্ধ করা
     logging.info(f"🔄 Verdict updated for ID {report_id}: {verdict}")
 
-# Initialize DB on startup
+# Initialize database
 try:
     init_db()
 except Exception as e:
     st.error(f"❌ Database initialization error: {e}")
+    logging.error(e)
     st.stop()
 
 
@@ -261,7 +260,7 @@ except:
 
 st.sidebar.markdown("### 🤖 YachaiFactBot")
 st.sidebar.markdown("_Uncover the truth, one fact at a time._")
-st.sidebar.success("🧠 Persistent Memory Active (SQLite)") # তোমার নতুন DB স্ট্যাটাস
+# st.sidebar.success("🧠 Persistent Memory Active (SQLite)") # এই লাইনটি get_db_connection() ফাংশনে মুভ করা হয়েছে
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio("নেভিগেশন", ["🔍 নাগরিক পোর্টাল", "🧑‍💼 অ্যাডমিন প্যানেল"])
@@ -486,12 +485,6 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
                                 if send_alert(alert_msg):
                                     st.success("✅ ম্যানুয়াল অ্যালার্ট পাঠানো হয়েছে।")
                                     st.rerun()
-                                else:
-                                    st.error("❌ ম্যানুয়াল অ্যালার্ট পাঠানো ব্যর্থ হয়েছে।")
-                    else:
-                        st.success("✅ আপডেট হয়েছে!")
-                        st.rerun()
-    
     elif password:
         st.error("🔒 ভুল পাসওয়ার্ড।")
     else:
