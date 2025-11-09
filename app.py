@@ -1,187 +1,183 @@
 import streamlit as st
-import json
 import pandas as pd
 import requests
 import google.generativeai as genai
+import json
+import re
+import logging
 import os
-import re # (A) JSON পার্সিং এর জন্য ইম্পোর্ট
-import logging # (E) লগিং এর জন্য ইম্পোর্ট
 from datetime import datetime
-from streamlit_lottie import st_lottie # === লটি ইম্পোর্ট ===
+import psycopg2 # 👈 তোমার নতুন SQLite-এর জায়গায় ক্লাউড-রেডি Postgres
+import matplotlib.pyplot as plt # 👈 তোমার নতুন চার্ট লাইব্রেরি
+from fpdf import FPDF # 👈 তোমার নতুন PDF লাইব্রেরি
 
 # --- 1. পেজ কনফিগারেশন এবং লগিং সেটআপ ---
-st.set_page_config(
-    page_title="যাচাই | সুরক্ষিত গণতন্ত্র",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প্ল্যাটফর্ম", page_icon="🧠", layout="wide")
 
 # (E) লগিং কনফিগার করা
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='yachai_app.log', # লগগুলো একটি ফাইলে সেভ হবে
-    filemode='a'
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
+
+# --- তোমার নতুন CSS ---
+st.markdown("""
+<style>
+.stApp { background: linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#f0f0f0; }
+h1,h2,h3 { color:#00bfff !important; text-align:center; font-family:'Poppins',sans-serif; }
+div.stButton>button:first-child{background-color:#00bfff;color:white;font-weight:bold;border-radius:12px;
+border:none;padding:0.6rem 1.2rem;transition:all 0.3s ease-in-out;}
+div.stButton>button:first-child:hover{background-color:#1e90ff;transform:scale(1.05);}
+textarea{border-radius:10px !important;border:1px solid #00bfff !important;
+background-color:rgba(255,255,255,0.1) !important;color:#ffffff !important;}
+.alert{text-align:center;background-color:rgba(0,191,255,0.2);border:1px solid #00bfff;padding:10px;
+border-radius:10px;color:#aee7ff;font-weight:bold;margin-top:15px;}
+.explanation{background-color:rgba(255,255,255,0.08);border-left:4px solid #00bfff;padding:10px;
+border-radius:8px;color:#e6f9ff;font-size:15px;margin-top:10px;}
+</style>
+""", unsafe_allow_html=True)
+
 
 # --- 2. সিক্রেট এবং API কী লোড ---
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")
 BOT_TOKEN = st.secrets.get("bot_token", "YOUR_BOT_TOKEN")
 CHAT_ID = st.secrets.get("chat_id", "YOUR_CHAT_ID")
 ADMIN_PASS = st.secrets.get("ADMIN_PASS", "demo123")
-MAX_INPUT_LENGTH = 3000 # (D) ইনপুট লিমিট
+DATABASE_URL = st.secrets.get("DATABASE_URL") # 👈 Neon DB-এর কানেকশন স্ট্রিং
 
-# --- 3. (A) নিরাপদ JSON পার্সিং ফাংশন ---
+# =====================================================
+# 🧱 DATABASE LAYER (Postgres / Neon)
+# =====================================================
+
+@st.cache_resource # ডেটাবেস কানেকশন ক্যাশ করা
+def get_db_connection():
+    if not DATABASE_URL:
+        st.error("DATABASE_URL (Neon Connection String) secrets-এ সেট করা নেই।")
+        logging.error("DATABASE_URL পাওয়া যায়নি।")
+        st.stop()
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Postgres-এর জন্য id SERIAL PRIMARY KEY এবং timestamp TIMESTAMPTZ
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id SERIAL PRIMARY KEY,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, 
+            text TEXT,
+            score INTEGER,
+            verdict TEXT,
+            justification TEXT,
+            final_verdict TEXT
+        )
+    """)
+    conn.commit()
+    c.close()
+    conn.close()
+
+def insert_report(text, score, verdict, justification):
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Postgres-এর জন্য %s প্লেসহোল্ডার
+    c.execute("INSERT INTO reports (text, score, verdict, justification, final_verdict) VALUES (%s, %s, %s, %s, %s)",
+              (text, score, verdict, justification, None))
+    conn.commit()
+    c.close()
+    conn.close()
+
+@st.cache_data(ttl=60) # ১ মিনিটের জন্য ডেটা ক্যাশ করা
+def fetch_all_reports():
+    conn = get_db_connection()
+    # pd.read_sql সরাসরি Postgres কানেকশন হ্যান্ডেল করতে পারে
+    df = pd.read_sql_query("SELECT * FROM reports ORDER BY timestamp DESC", conn)
+    conn.close()
+    return df
+
+def update_verdict(report_id, verdict):
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Postgres-এর জন্য %s প্লেসহোল্ডার
+    c.execute("UPDATE reports SET final_verdict=%s WHERE id=%s", (verdict, report_id))
+    conn.commit()
+    c.close()
+    conn.close()
+
+# অ্যাপ চালু হলেই ডেটাবেস চেক/তৈরি করবে
+try:
+    init_db()
+except Exception as e:
+    st.error(f"❌ ডেটাবেস কানেকশন ফেইল্ড! secrets.toml চেক কর।")
+    logging.error(f"DB Init Error: {e}")
+    st.stop()
+
+
+# =====================================================
+# 🔍 HELPER FUNCTIONS (জেসন)
+# =====================================================
 def safe_parse_json(text):
-    """
-    AI-এর জেনারেট করা টেক্সট থেকে নিরাপদে JSON অবজেক্ট বের করে আনে।
-    """
     try:
-        # ```json...``` ট্যাগগুলো রিমুভ করা
-        t = text.strip()
-        t = re.sub(r"^```json", "", t, flags=re.I).strip()
+        t = re.sub(r"^```json", "", text, flags=re.I).strip()
         t = re.sub(r"```$", "", t).strip()
-        
-        # টেক্সটের ভেতর থেকে { ... } অংশটি খুঁজে বের করা
         m = re.search(r"(\{.*\})", t, flags=re.S)
         if m:
             t = m.group(1)
-        
         return json.loads(t)
     except Exception as e:
-        logging.error(f"JSON পার্সিং ব্যর্থ হয়েছে। টেক্সট: {text}, ত্রুটি: {e}")
-        return None # পার্সিং ব্যর্থ হলে None রিটার্ন করবে
-
-# --- (Step 2) লটি অ্যানিমেশন লোডার ফাংশন ---
-@st.cache_data # নেটওয়ার্ক কল ক্যাশ করার জন্য
-def load_lottie_url(url: str):
-    r = requests.get(url)
-    if r.status_code != 200:
+        logging.error(f"JSON Parse Error: {e}")
         return None
-    return r.json()
 
-# --- 4. জেমিনি AI ফাংশন (উন্নত ফলব্যাক সিস্টেম সহ) ---
+# =====================================================
+# 🧠 AI ANALYSIS (আসল Gemini)
+# =====================================================
 def get_gemini_analysis(text_to_analyze):
     try:
-        if GEMINI_API_KEY == "YOUR_GEMINI_KEY" or not GEMINI_API_KEY.startswith("AIza"):
-            st.error("Gemini API কী সেট করা নেই। `secrets.toml` ফাইল চেক করুন।")
-            logging.error("GEMINI_API_KEY পাওয়া যায়নি।")
-            return None
         genai.configure(api_key=GEMINI_API_KEY)
+        models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash-latest']
+
+        prompt = f"""
+        তুমি 'যাচাই' নামের একজন AI ফ্যাক্ট-চেকার।
+        নিচের টেক্সট বিশ্লেষণ করো: "{text_to_analyze}"
+        শুধু JSON আকারে উত্তর দাও:
+        {{
+          "score": [০-১০০],
+          "verdict": ["সত্য", "সম্ভবত সত্য", "বিভ্রান্তিকর", "সম্ভবত মিথ্যা", "মিথ্যা"],
+          "justification": "[বাংলায় সংক্ষিপ্ত ব্যাখ্যা]"
+        }}
+        """
+
+        for model_name in models_to_try:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                analysis = safe_parse_json(response.text)
+                if analysis:
+                    analysis["score"] = int(float(analysis.get("score", 0)))
+                    return analysis
+            except Exception as e:
+                logging.warning(f"{model_name} ব্যর্থ: {e}")
+        return None
     except Exception as e:
-        st.error(f"API কনফিগারেশনে সমস্যা: {e}")
-        logging.error(f"Gemini API কনফিগারেশন ত্রুটি: {e}")
+        logging.error(f"Gemini error: {e}")
         return None
 
-    # ============== আপনার ফলব্যাক সিস্টেম এখানে ==============
-    models_to_try = [
-        'gemini-2.5-flash',         # আপনার অনুরোধ করা প্রাইমারি মডেল
-        'gemini-1.5-flash-latest'   # ফলব্যাক মডেল
-    ]
-    # =======================================================
-    
-    prompt = f"""
-    তুমি 'যাচাই' নামের একজন AI ফ্যাক্ট-চেকার। তোমার কাজ বাংলাদেশের নির্বাচন সম্পর্কিত ভুল তথ্য শনাক্ত করা।
-    নিম্নলিখিত টেক্সটটি বিশ্লেষণ করো: "{text_to_analyze}"
-    তোমার উত্তর অবশ্যই একটি JSON ফরম্যাটে হতে হবে। অন্য কোনো টেক্সট থাকা চলবে না।
-    ফরম্যাট:
-    {{
-      "score": [০-১০০ পর্যন্ত একটি সংখ্যা, যেখানে ১০০ মানে এটি সম্পূর্ণ মিথ্যা],
-      "verdict": ["সত্য", "সম্ভবত সত্য", "বিভ্রান্তিকর", "সম্ভবত মিথ্যা", "মিথ্যা"],
-      "justification": "[কেন এটি সত্য বা মিথ্যা, তার একটি সংক্ষিপ্ত ব্যাখ্যা বাংলাতে]"
-    }}
-    """
-    
-    response_text = None # রেসপন্স জমা রাখার জায়গা
-
-    # একটি লুপের মাধ্যমে মডেলগুলো চেষ্টা করা
-    for model_name in models_to_try:
-        try:
-            logging.info(f"{model_name} মডেল দিয়ে চেষ্টা করা হচ্ছে...")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            response_text = response.text
-            
-            # সফল হলে, লুপ ব্রেক করবে
-            logging.info(f"{model_name} মডেল সফল হয়েছে।")
-            break 
-        
-        except Exception as e:
-            # মডেলটি ব্যর্থ হলে লগ করা এবং পরবর্তী মডেলে চেষ্টা করা
-            logging.warning(f"'{model_name}' মডেলে ত্রুটি: {e}. পরবর্তী মডেলে চেষ্টা করা হচ্ছে...")
-            continue # পরবর্তী মডেলে যাও
-
-    # যদি সব মডেল ব্যর্থ হয়
-    if response_text is None:
-        logging.error("সকল AI মডেল কল ব্যর্থ হয়েছে।")
-        st.error("AI সেবাটি এই মুহূর্তে পাওয়া যাচ্ছে না। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।")
-        return None
-
-    # সফল হলে রেসপন্স পার্স করা
-    try:
-        analysis = safe_parse_json(response_text)
-        
-        if analysis is None:
-            logging.error(f"AI একটি ভুল ফরম্যাটে উত্তর দিয়েছে: {response_text}")
-            st.error("AI এর কাছ থেকে উত্তর পাওয়া যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।")
-            return None
-        
-        # (C) স্কোর নর্মালাইজেশন
-        raw_score = analysis.get('score')
-        score = 0
-        try:
-            numeric_score = float(raw_score)
-            if numeric_score <= 1.0 and numeric_score > 0: # 0-1 স্কেল চেক
-                score = int(numeric_score * 100)
-            elif numeric_score >= 1.0: # 0-100 স্কেল
-                score = int(numeric_score)
-        except (ValueError, TypeError, TypeError):
-            logging.warning(f"AI একটি ভুল স্কোর ফরম্যাট দিয়েছে: {raw_score}")
-            score = 0
-            
-        analysis['score'] = score
-        return analysis
-
-    except Exception as e:
-        logging.exception(f"রেসপন্স পার্সিং-এ অজানা ত্রুটি: {e}")
-        st.error("AI এর উত্তর প্রসেস করতে সমস্যা হয়েছে।")
-        return None
-
-
-# --- 5. টেলিগ্রাম অ্যালার্ট ফাংশন (উন্নত) ---
+# =====================================================
+# 📢 TELEGRAM ALERT (আসল বট)
+# =====================================================
 def send_alert(message):
-    if BOT_TOKEN == "YOUR_BOT_TOKEN" or CHAT_ID == "YOUR_CHAT_ID":
-        st.warning("⚠️ টেলিগ্রাম টোকেন/চ্যাট ID সেট করা নেই। অ্যালার্ট পাঠানো সম্ভব নয়।")
-        logging.warning("টেলিগ্রাম টোকেন বা চ্যাট আইডি পাওয়া যায়নি।")
-        return False
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-        response = requests.post(url, data=payload, timeout=10) # টাইমআউট যোগ করা
-        
-        if response.status_code == 200:
-            # st.success("📱 অ্যালার্ট সফলভাবে পাঠানো হয়েছে!") # এই লাইনটি ম্যানুয়াল বাটনে দেখানো হবে
-            logging.info("টেলিগ্রাম অ্যালার্ট সফলভাবে পাঠানো হয়েছে।")
-            return True
-        else:
-            st.error(f"❌ অ্যালার্ট পাঠাতে সমস্যা: {response.text}")
-            logging.error(f"টেলিগ্রাম API ত্রুটি: {response.status_code} - {response.text}")
-            return False
-    except requests.exceptions.RequestException as e: # নেটওয়ার্ক এরর ধরা
-        st.error(f"❌ নেটওয়ার্ক এরর: {str(e)}")
-        logging.exception(f"টেলিগ্রাম পাঠাতে নেটওয়ার্ক ত্রুটি: {e}")
+        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"} # HTML পার্স মোড
+        res = requests.post(url, data=payload, timeout=10)
+        return res.status_code == 200
+    except Exception as e:
+        logging.error(f"Telegram alert ব্যর্থ: {e}")
         return False
 
-# ==========================================================
-# ============== আপনার যোগ করা নতুন ফাংশন (v3.6) ==============
 @st.cache_data(ttl=300) # ৫ মিনিটের জন্য কানেকশন স্ট্যাটাস ক্যাশ করা
 def check_telegram_connection():
     if BOT_TOKEN == "YOUR_BOT_TOKEN":
         st.sidebar.error("❌ Telegram Token নেই।")
         return False
-        
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
     try:
         response = requests.get(url, timeout=10)
@@ -191,318 +187,273 @@ def check_telegram_connection():
             return True
         else:
             st.sidebar.error("❌ Telegram connection failed.")
-            logging.error(f"Telegram /getMe failed: {data.get('description')}")
             return False
     except Exception as e:
         st.sidebar.error(f"⚠️ Telegram check failed: {e}")
-        logging.exception(f"Telegram /getMe exception: {e}")
         return False
-# ==========================================================
 
-
-# --- 6. ডেটা লোড/সেভ ফাংশন (উন্নত লগিং) ---
-DATA_FILE = "submissions.json"
-
-@st.cache_data(ttl=30)
-def load_data():
+# =====================================================
+# 🎨 ANIMATIONS (লটি লোডার)
+# =====================================================
+@st.cache_data
+def load_lottie_url(url):
     try:
-        data = [json.loads(line) for line in open(DATA_FILE, "r", encoding="utf-8")]
-        df = pd.DataFrame(data)
-        if "final_verdict" not in df.columns:
-            df["final_verdict"] = None
-        if "timestamp" not in df.columns:
-            df["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cols_order = ["timestamp", "text", "score", "verdict", "justification", "final_verdict"]
-        existing_cols = [col for col in cols_order if col in df.columns]
-        df = df[existing_cols]
-        return df.sort_values(by="timestamp", ascending=False)
-    except FileNotFoundError:
-        logging.warning(f"❌ {DATA_FILE} ফাইল পাওয়া যায়নি। একটি স্যাম্পল ফাইল তৈরি করা হচ্ছে...")
-        sample_data = [
-            {"text": "ভোটার লিস্টে ১ কোটি নাম অদৃশ্য হয়েছে!", "score": 80, "verdict": "সম্ভবত মিথ্যা", "justification": "এটি একটি পুরানো গুজব।", "timestamp": "2025-11-01 10:30:00", "final_verdict": None},
-        ]
-        df = pd.DataFrame(sample_data)
-        save_data(df) # সেভ ফাংশন কল করা
-        return df
-    except Exception as e:
-        st.error(f"ডেটা লোড করতে সমস্যা: {e}")
-        logging.exception(f"ডেটা লোড করতে ব্যর্থ: {e}")
-        return pd.DataFrame()
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except:
+        return None # লোড ফেইল হলে অ্যাপ যেন ক্র্যাশ না করে
 
-def save_data(df):
-    try:
-        df.to_json(DATA_FILE, orient="records", lines=True, force_ascii=False)
-        logging.info(f"{DATA_FILE} ফাইলে ডেটা সেভ করা হয়েছে।")
-    except Exception as e:
-        st.error(f"ডেটা সেভ করতে সমস্যা: {e}")
-        logging.exception(f"ডেটা সেভ করতে ব্যর্থ: {e}")
-
-# --- (Step 3) লটি অ্যানিমেশনগুলো লোড করা ---
 lottie_loading = load_lottie_url("https://assets9.lottiefiles.com/packages/lf20_qp1q7mct.json")
 lottie_success = load_lottie_url("https://assets2.lottiefiles.com/packages/lf20_mq9m0vpg.json")
 lottie_alert = load_lottie_url("https://assets1.lottiefiles.com/packages/lf20_jtbfg2nb.json")
 
-# --- 7. সাইডবার নেভিগেশন ---
-st.sidebar.title("🧠 যাচাই (Yachai)")
-st.sidebar.subheader("যাচাই তথ্যে, সুরক্ষিত গণতন্ত্র।")
+# =====================================================
+# 🧭 NAVIGATION (সাইডবার)
+# =====================================================
+# --- তোমার নতুন সাইডবার ডিজাইন ---
+try:
+    st.sidebar.image("yachai_logo.png", width=180)
+except:
+    st.sidebar.warning("`yachai_logo.png` ফাইলটি যোগ করুন।")
+
+st.sidebar.markdown("### 🤖 YachaiFactBot")
+st.sidebar.markdown("_Uncover the truth, one fact at a time._")
+st.sidebar.markdown("---")
+
 page = st.sidebar.radio("নেভিগেশন", ["🔍 নাগরিক পোর্টাল", "🧑‍💼 অ্যাডমিন প্যানেল"])
 st.sidebar.markdown("---")
 
-# --- 8. পেইজ ১: নাগরিক পোর্টাল (উন্নত) ---
+
+# =====================================================
+# 🌐 Citizen Portal (তোমার নতুন ডিজাইন + আসল ব্যাকএন্ড)
+# =====================================================
 if page == "🔍 নাগরিক পোর্টাল":
-    st.title("তথ্য যাচাই করুন")
-    st.caption("AI-চালিত ফ্যাক্ট-চেকিং প্ল্যাটফর্ম")
+    
+    # --- তোমার নতুন হেডার ---
+    st.markdown("""
+    <h1>🧠 YachaiFactBot</h1>
+    <p style='text-align:center;color:#cccccc;'>AI-চালিত তথ্য যাচাই এবং টেলিগ্রাম অ্যালার্ট সিস্টেম 🇧🇩</p>
+    """, unsafe_allow_html=True)
 
-    # (F) PII সুরক্ষা সতর্কতা
-    st.warning("⚠️ **সতর্কতা:** অনুগ্রহ করে কোনো ব্যক্তিগত তথ্য (যেমন: ফোন নম্বর, NID, ঠিকানা) এখানে জমা দেবেন না।")
+    # === 4. তোমার নতুন Intro Text ===
+    st.markdown("> “An AI-driven fact-verification platform for citizens of Bangladesh — powered by Gemini Pro & Team Believer.”")
 
-    st.write("👉 নিচে সন্দেহজনক তথ্য, খবর বা সোশ্যাল মিডিয়া পোস্ট পেস্ট করুন:")
-    user_input = st.text_area(
-        "আপনার তথ্য লিখুন:", 
-        placeholder="উদাহরণ: 'নির্বাচনের তারিখ আবারো পেছানো হয়েছে...' বা কোনো ফেসবুক পোস্ট...", 
-        height=150,
-        label_visibility="collapsed"
-    )
+    st.write("### 🔍 নাগরিক তথ্য যাচাই পোর্টাল")
+    user_input = st.text_area("👉 উদাহরণ: 'ভোটার লিস্টে ১ কোটি নাম মুছে গেছে' জাতীয় খবর বা পোস্ট লিখুন:", height=150)
 
     if st.button("যাচাই করুন", type="primary"):
         input_text = user_input.strip()
-        
-        # (D) ইনপুট ভ্যালিডেশন
-        if input_text == "":
-            st.warning("অনুগ্রহ করে যাচাই করার জন্য কিছু লিখুন!")
-        elif len(input_text) > MAX_INPUT_LENGTH:
-            st.error(f"❌ ইনপুটটি খুব দীর্ঘ। অনুগ্রহ করে {MAX_INPUT_LENGTH} অক্ষরের মধ্যে সংক্ষিপ্ত করুন।")
-            logging.warning(f"ইনপুট দৈর্ঘ্য ({len(input_text)}) অতিক্রম করেছে।")
+        if not input_text:
+            st.warning("⚠️ অনুগ্রহ করে কিছু লিখুন।")
         else:
-            analysis_result = None # ফলাফল রাখার জায়গা
-            with st.spinner("AI বিশ্লেষণ করছে... অনুগ্রহ করে অপেক্ষা করুন..."):
-                # --- (Step 4) লোডিং অ্যানিমেশন যোগ করা ---
-                if lottie_loading:
-                    st_lottie(lottie_loading, height=180, key="loading")
-                analysis_result = get_gemini_analysis(input_text)
-            
-            # স্পিনারের বাইরে ফলাফল দেখানো
-            if analysis_result:
-                st.subheader("AI বিশ্লেষণ ফলাফল:")
-                score = analysis_result.get('score', 0)
-                verdict = analysis_result.get('verdict', 'N/A')
-                justification = analysis_result.get('justification', 'N/A')
+            with st.spinner("🤖 AI যাচাই চলছে..."):
+                # --- আসল AI কল (র‍্যান্ডম নয়) ---
+                result = get_gemini_analysis(input_text)
 
+            if result:
+                # --- আসল ফলাফল ---
+                score = result.get("score", 0) # Suspicion Score
+                truth_score = 100 - score
+                verdict = result.get("verdict", "N/A")
+                justification = result.get("justification", "N/A")
+
+                # --- আসল ডেটাবেসে সেভ ---
+                insert_report(input_text, score, verdict, justification)
+
+                # --- ফলাফল প্রদর্শন ---
                 if score > 75:
-                    st.error(f"**ভার্ডিক্ট: {verdict}** (মিথ্যা হওয়ার সম্ভাবনা: {score}%)")
+                    st.error(f"❌ **ভার্ডিক্ট:** {verdict} ({score}% সন্দেহজনক)")
                 elif score > 50:
-                    st.warning(f"**ভার্ডিক্ট: {verdict}** (মিথ্যা হওয়ার সম্ভাবনা: {score}%)")
+                    st.warning(f"⚠️ **ভার্ডিক্ট:** {verdict} ({score}% সন্দেহজনক)")
                 else:
-                    st.success(f"**ভার্ডিক্ট: {verdict}** (মিথ্যা হওয়ার সম্ভাবনা: {score}%)")
+                    st.success(f"✅ **ভার্ডিক্ট:** {verdict} ({score}% সন্দেহজনক)")
 
-                st.info(f"**ব্যাখ্যা:** {justification}")
-                
-                data_to_save = {
-                    "text": input_text,
-                    "score": score,
-                    "verdict": verdict,
-                    "justification": justification,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "final_verdict": None # === বাগ ফিক্স (ভার্সন ৩.৪) ===
-                }
-                
-                try:
-                    with open(DATA_FILE, "a", encoding="utf-8") as f:
-                        json.dump(data_to_save, f, ensure_ascii=False)
-                        f.write("\n")
-                    # (E) সফল সেভে লগিং
-                    logging.info(f"নতুন তথ্য জমা হয়েছে: {input_text[:50]}...")
-                    st.success("✅ আপনার তথ্যটি আমাদের ডেটাবেসে সংরক্ষিত হয়েছে। ফ্যাক্ট-চেকাররা এটি রিভিউ করবেন।")
+                # --- তোমার নতুন matplotlib চার্ট ---
+                st.write("### 📊 AI Confidence Meter")
+                data = pd.DataFrame({'Category':['Truth Probability','Misinformation Probability'],'Score':[truth_score,score]})
+                fig, ax = plt.subplots(figsize=(5,3))
+                ax.bar(data['Category'], data['Score'], color=['#00bfff','#ff4d4d'])
+                ax.set_ylim(0,100)
+                ax.set_ylabel('Confidence %')
+                ax.set_title('AI Confidence Meter', color='white')
+                ax.tick_params(colors='white') # অক্ষের রঙ
+                fig.patch.set_alpha(0) # চার্টের الخلفية স্বচ্ছ করা
+                ax.set_facecolor('none') # অক্ষের الخلفية স্বচ্ছ করা
+                st.pyplot(fig)
+                chart_path = "chart.png"
+                # === 2. তোমার নতুন Sharp চার্ট ===
+                fig.savefig(chart_path, transparent=True, bbox_inches='tight', dpi=200)
 
-                    # --- (Step 5) ফলাফল অ্যানিমেশন ---
-                    if score > 75 and lottie_alert:
-                        st_lottie(lottie_alert, height=180, key="alert")
-                    elif lottie_success:
-                        st_lottie(lottie_success, height=180, key="success")
 
-                except Exception as e:
-                    st.error(f"ডেটা সেভ করতে সমস্যা হয়েছে: {e}")
-                    logging.exception(f"নতুন তথ্য {DATA_FILE}-এ সেভ করতে ব্যর্থ।")
+                # --- তোমার নতুন AI ব্যাখ্যা (আসল জাস্টিফিকেশন) ---
+                st.markdown(f"<div class='explanation'><b>💬 AI ব্যাখ্যা:</b> {justification}</div>", unsafe_allow_html=True)
+                st.success("✅ রিপোর্টটি আমাদের ডেটাবেসে সংরক্ষিত হয়েছে।")
 
-# --- 9. পেইজ ২: অ্যাডমিন প্যানেল (উন্নত) ---
+                # --- তোমার নতুন PDF রিপোর্ট (আসল ডেটা সহ) ---
+                if st.button("📄 Save Visual Report (PDF)"):
+                    pdf = FPDF()
+                    pdf.add_page()
+                    
+                    # বাংলা ফন্ট যোগ করা (গুরুত্বপূর্ণ)
+                    try:
+                        pdf.add_font('Bangla', '', 'SolaimanLipi.ttf', uni=True)
+                        pdf.set_font('Bangla', '', 12)
+                    except RuntimeError:
+                        st.error("❌ PDF বানাতে সমস্যা: `SolaimanLipi.ttf` ফন্ট ফাইলটি পাওয়া যায়নি।")
+                        st.stop()
+
+                    pdf.set_font('Bangla', 'B', 16)
+                    pdf.cell(0, 10, txt="YachaiFactBot - AI Verification Report", ln=True, align='C')
+                    
+                    pdf.set_font('Bangla', '', 12)
+                    pdf.multi_cell(0, 10, txt=f"\nUser Query:\n{input_text}")
+                    pdf.cell(0, 10, txt=f"\nSuspicion Score: {score}%", ln=True)
+                    pdf.cell(0, 10, txt=f"Truth Probability: {truth_score}%", ln=True)
+                    pdf.multi_cell(0, 10, txt=f"\nAI Explanation:\n{justification}")
+                    
+                    # === 3. PDF-এ Gemini মডেলের নাম ===
+                    pdf.cell(0, 10, txt="Model: Gemini-2.5 Flash (Pro API)", ln=True)
+                    pdf.ln(5) # একটু গ্যাপ
+                    
+                    try:
+                        pdf.image("yachai_logo.png", x=160, y=10, w=30)
+                    except:
+                        pass # লোগো না থাকলে সমস্যা নেই
+                    
+                    pdf.image(chart_path, x=40, y=pdf.get_y() + 5, w=130)
+                    pdf.set_y(pdf.get_y() + 80) # চার্টের নিচে কার্সর আনা
+
+                    # === 1. PDF-এ টিমের নাম ===
+                    pdf.set_font('Bangla', 'B', 12)
+                    pdf.cell(0, 10, txt="Developed by Team Believer 💡", ln=True, align='C')
+
+                    pdf_file_path = "Yachai_Report_Visual.pdf"
+                    pdf.output(pdf_file_path)
+
+                    with open(pdf_file_path, "rb") as file:
+                        st.download_button("⬇️ Download Visual Report (PDF)", file, pdf_file_path, "application/pdf")
+            else:
+                st.error("❌ AI সেবাটি এই মুহূর্তে পাওয়া যাচ্ছে না। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।")
+
+# =====================================================
+# 🧑‍💼 Admin Panel (আমাদের পুরোনো প্যানেল)
+# =====================================================
 elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
-    st.title("🧑‍💼 যাচাই ফ্যাক্ট-চেকার প্যানেল")
-    st.caption("চূড়ান্ত যাচাই এবং টেলিগ্রাম অ্যালার্ট সিস্টেম")
+    password = st.sidebar.text_input("🔑 অ্যাডমিন পাসওয়ার্ড", type="password")
 
-    password = st.sidebar.text_input("অ্যাডমিন পাসওয়ার্ড লিখুন:", type="password")
-    
     if password == ADMIN_PASS:
         st.sidebar.success("লগ-ইন সফল!")
         logging.info("অ্যাডমিন লগইন সফল।")
-
-        # ==========================================================
-        # ============== নতুন ফাংশন কল করা (v3.6) ==============
-        check_telegram_connection()
-        # ==========================================================
         
-        # ==========================================================
-        # ============== আপনার যোগ করা কন্ট্রোল (ভার্সন ৩.১) ==============
+        # --- অ্যাডমিন সাইডবার কন্ট্রোল ---
+        check_telegram_connection()
+        
         st.sidebar.markdown("### 🔔 Alert settings")
         alert_threshold = st.sidebar.slider(
-            "Alert threshold (score %) — অটোমেটিক অ্যালার্ট যাবে যদি স্কোর ≥ এই মান", 
+            "Alert threshold (score %)", 
             min_value=0, max_value=100, value=75, step=5
         )
-        auto_send = st.sidebar.checkbox("Auto-send alerts when tagged 'মিথ্যা' and score ≥ threshold", value=False)
+        auto_send = st.sidebar.checkbox("Auto-send 'মিথ্যা' alerts", value=False)
         
-        # ==========================================================
-        # ============== আপনার যোগ করা নতুন ডিবাগ প্যানেল (ভার্সন ৩.৩) ==============
-        st.sidebar.markdown("---") # সেপারেটর
+        st.sidebar.markdown("---")
         with st.sidebar.expander("🧩 Secrets Debug Panel", expanded=False):
             st.write("**GEMINI_API_KEY:**", "✅ লোড হয়েছে" if GEMINI_API_KEY and "AIza" in GEMINI_API_KEY else "❌ নেই")
             st.write("**BOT_TOKEN:**", "✅ লোড হয়েছে" if BOT_TOKEN and ":" in BOT_TOKEN else "❌ নেই")
-            # চ্যাট আইডি চেক (নেগেটিভ সংখ্যা সাপোর্ট করার জন্য)
             chat_id_check = CHAT_ID and (CHAT_ID.isdigit() or (CHAT_ID.startswith("-") and CHAT_ID[1:].isdigit()))
             st.write("**CHAT_ID:**", f"✅ {CHAT_ID}" if chat_id_check else "❌ নেই")
-            st.write("**ADMIN_PASS:**", "✅ সেট করা হয়েছে" if ADMIN_PASS and ADMIN_PASS != "demo123" else "❌ (ডিফল্ট/নেই)")
-            
-            if st.sidebar.button("📲 Test Telegram Alert (Debug)", key="debug_test_alert"):
-                test_msg = "🧪 Debug: YachaiBot test alert — সিক্রেট যাচাই সফল!"
-                ok = send_alert(test_msg)
-                if ok:
-                    st.success("✅ টেস্ট অ্যালার্ট সফলভাবে পাঠানো হয়েছে!")
-                else:
-                    st.error("❌ টেস্ট অ্যালার্ট পাঠানো যায়নি।")
-        # ==========================================================
-
-
-        df = load_data()
-
-        # স্ট্যাটাস ড্যাশবোর্ড
-        st.sidebar.header("📊 স্ট্যাটিস্টিক্স")
-        total_reports = len(df)
-        verified_reports = df["final_verdict"].notna().sum()
-        pending_reports = total_reports - verified_reports
-        false_reports = (df["final_verdict"] == "মিথ্যা").sum()
-
-        st.sidebar.metric("মোট রিপোর্ট", total_reports)
-        st.sidebar.metric("যাচাই করা হয়েছে", verified_reports)
-        st.sidebar.metric("যাচাই বাকি আছে", pending_reports)
-        st.sidebar.metric("❌ মিথ্যা শনাক্ত হয়েছে", false_reports)
+            st.write("**DATABASE_URL:**", "✅ লোড হয়েছে" if DATABASE_URL and "postgres" in DATABASE_URL else "❌ নেই")
+            if st.sidebar.button("📲 Test Telegram Alert (Debug)"):
+                send_alert("🧪 Debug: YachaiBot test alert — সিক্রেট যাচাই সফল!")
         
-        st.sidebar.markdown("---") # স্ট্যাটাস এবং রিলোড বাটনের মাঝের সেপারেটর
+        st.sidebar.markdown("---")
         if st.sidebar.button("🔄 ডেটা রিলোড করুন"):
             st.cache_data.clear()
-            logging.info("অ্যাডমিন ডেটা রিলোড করেছেন।")
             st.rerun()
 
-        st.info(f"মোট {pending_reports} টি রিপোর্ট যাচাইয়ের জন্য পেন্ডিং আছে।")
+        # --- অ্যাডমিন ড্যাশবোর্ড ---
+        st.title("🧑‍💼 Admin Dashboard")
         
-        filter_option = st.radio(
-            "ফিল্টার করুন:",
-            ["পেন্ডিং", "যাচাইকৃত", "সব রিপোর্ট"],
-            horizontal=True
-        )
+        try:
+            df = fetch_all_reports()
+        except Exception as e:
+            st.error(f"ডেটা লোড করতে ব্যর্থ: {e}")
+            st.stop()
         
-        if filter_option == "পেন্ডিং":
-            df_display = df[df["final_verdict"].isna()]
-        elif filter_option == "যাচাইকৃত":
-            df_display = df[df["final_verdict"].notna()]
-        else:
-            df_display = df
+        st.info(f"মোট রিপোর্ট: {len(df)}")
+        st.dataframe(df, use_container_width=True)
 
-        if df_display.empty:
-            st.warning("এই ফিল্টারে কোনো ডেটা নেই।")
-        else:
-            st.dataframe(df_display, use_container_width=True, height=300)
-
-            st.subheader("✅ একটি রিপোর্ট যাচাই করুন:")
-            
-            # শুধুমাত্র পেন্ডিং আইটেমগুলো থেকে সিলেক্ট করার অপশন
-            pending_texts = df_display[df["final_verdict"].isna()]["text"].tolist()
-            
-            if not pending_texts:
-                st.success("🎉 সকল রিপোর্ট যাচাই করা হয়েছে!")
+        if len(df) > 0:
+            st.subheader("✅ রিপোর্ট যাচাই করুন")
+            pending = df[df["final_verdict"].isna()]
+            if len(pending) == 0:
+                st.success("🎉 সব রিপোর্ট যাচাই সম্পন্ন!")
             else:
-                selected_text = st.selectbox("রিপোর্ট নির্বাচন করুন (শুধুমাত্র পেন্ডিং):", pending_texts)
+                # পেন্ডিং রিপোর্টগুলো থেকে সিলেক্ট করা
+                selected_text = st.selectbox("একটি পেন্ডিং রিপোর্ট নির্বাচন করুন:", pending["text"])
+                selected_row = pending[pending["text"] == selected_text].iloc[0]
                 
-                # ইনডেক্স খুঁজে বের করার জন্য একটি নিরাপদ উপায়
-                selected_index_list = df[df["text"] == selected_text].index
-                
-                if not selected_index_list.empty:
-                    selected_index = selected_index_list[0]
-                    selected_row = df.loc[selected_index]
+                report_id = int(selected_row["id"]) # ID ঠিকমতো নেওয়া
+                ai_score = int(selected_row["score"])
 
-                    st.markdown(f"**রিপোর্ট:** `{selected_row['text']}`")
-                    st.markdown(f"**AI ভার্ডিক্ট:** `{selected_row.get('verdict', 'N/A')}` (স্কোর: `{selected_row.get('score', 'N/A')}`%)")
-                    st.markdown(f"**AI ব্যাখ্যা:** *{selected_row.get('justification', 'N/A')}*")
+                st.markdown(f"**AI ভার্ডিক্ট:** {selected_row['verdict']} ({ai_score}%)")
+                st.markdown(f"**ব্যাখ্যা:** {selected_row['justification']}")
+
+                status = st.radio("ফাইনাল ট্যাগ দিন:", ["সত্য", "বিভ্রান্তিকর", "মিথ্যা"], key=f"status_{report_id}")
+                
+                if st.button("ফাইনাল ট্যাগ করুন ✅", type="primary"):
+                    update_verdict(report_id, status)
+                    st.cache_data.clear() # ডেটা আপডেট হয়েছে, ক্যাশ ক্লিয়ার
                     
-                    status = st.radio(
-                        "ফ্যাক্ট-চেক ফলাফল:", 
-                        ["সত্য", "বিভ্রান্তিকর", "মিথ্যা"], 
-                        key=f"status_{selected_index}",
-                        horizontal=True
-                    )
-
-                    if st.button("ফাইনাল ট্যাগ করুন ✅", type="primary"):
-                        # প্রথমে ডেটা সেভ করুন
-                        df.loc[selected_index, "final_verdict"] = status
-                        save_data(df)
-                        st.cache_data.clear()
-                        logging.info(f"অ্যাডমিন রিপোর্ট #{selected_index} কে '{status}' হিসেবে ট্যাগ করেছেন।")
+                    if status == "মিথ্যা":
+                        # অটো-সেন্ড লজিক
+                        if auto_send and ai_score >= alert_threshold:
+                            alert_msg = (
+                                f"🚨 <b>ভুয়া তথ্য শনাক্ত!</b> 🚨\n\n"
+                                f"<b>তথ্য:</b> <i>{selected_row['text']}</i>\n"
+                                f"<b>AI স্কোর:</b> {ai_score}%\n"
+                                f"<b>চূড়ান্ত সিদ্ধান্ত:</b> ❌ {status}\n\n"
+                                f"<i>#Build4Democracy #YachaiBot</i>"
+                            )
+                            if send_alert(alert_msg):
+                                st.success("📲 অটোমেটিক টেলিগ্রাম অ্যালার্ট পাঠানো হয়েছে।")
+                            else:
+                                st.error("⚠️ অ্যালার্ট পাঠাতে ব্যর্থ হয়েছে।")
+                            st.rerun()
                         
-                        # ==========================================================
-                        # ============== আপনার ফাইনাল অ্যালার্ট লজিক (ভার্সন ৩.৭) ==============
-                        if status == "মিথ্যা":
-                            # check score safety
-                            try:
-                                pkt_score = int(selected_row.get("score", 0))
-                            except Exception:
-                                pkt_score = 0
-
-                            # decide whether to auto send or ask for manual send
-                            if auto_send and pkt_score >= alert_threshold:
+                        else:
+                            # ম্যানুয়াল-সেন্ড লজিক
+                            st.info("রিপোর্টটি ‘মিথ্যা’ ট্যাগ করা হয়েছে।")
+                            st.write(f"AI স্কোর: **{ai_score}%** | থ্রেশহোল্ড: **{alert_threshold}%** | অটো-সেন্ড: **{auto_send}**")
+                            
+                            if st.button("📨 ম্যানুয়ালি অ্যালার্ট পাঠাও", key=f"manual_alert_{report_id}"):
                                 alert_msg = (
-                                    f"🚨 <b>ভুয়া তথ্য শনাক্ত!</b> 🚨\n\n"
+                                    f"🚨 <b>ম্যানুয়াল অ্যালার্ট:</b> যাচাইকৃত ভুয়া তথ্য!\n\n"
                                     f"<b>তথ্য:</b> <i>{selected_row['text']}</i>\n"
-                                    f"<b>AI স্কোর:</b> {pkt_score}%\n"
-                                    f"<b>চূড়ান্ত সিদ্ধান্ত:</b> ❌ {status}\n\n"
+                                    f"<b>AI স্কোর:</b> {ai_score}%\n"
+                                    f"<b>সিদ্ধান্ত:</b> ❌ {status}\n\n"
                                     f"<i>#Build4Democracy #YachaiBot</i>"
                                 )
                                 if send_alert(alert_msg):
-                                    logging.info(f"রিপোর্ট #{selected_index} এর জন্য অটো অ্যালার্ট পাঠানো হয়েছে।")
-                                    st.success("📲 টেলিগ্রাম অ্যালার্ট পাঠানো হয়েছে।")
+                                    st.success("✅ ম্যানুয়াল অ্যালার্ট পাঠানো হয়েছে।")
+                                    st.rerun()
                                 else:
-                                    st.error("⚠️ অ্যালার্ট পাঠাতে ব্যর্থ হয়েছে। লগ চেক কর।")
-                                # অটো-সেন্ড সফল (বা ব্যর্থ) হওয়ার পর পেজ রিলোড করুন
-                                st.rerun()
-                            
-                            else:
-                                # manual confirmation UI (অ্যাডমিনকে জিজ্ঞেস করে পাঠাবে)
-                                # *পেজ রিলোড করা হবে না*, যাতে নিচের বাটনটি দেখা যায়
-                                st.info("এই রিপোর্টটি ‘মিথ্যা’ হিসেবে ট্যাগ করা হয়েছে কিন্তু অটো-অ্যালার্ট চালু নেই।")
-                                st.write(f"AI স্কোর: **{pkt_score}%** | Alert threshold: **{alert_threshold}%** | Auto-send: **{auto_send}**")
-
-                                if st.button("📨 ম্যানুয়ালি অ্যালার্ট পাঠাও", key=f"manual_alert_{selected_index}"):
-                                    alert_msg = (
-                                        f"🚨 <b>ম্যানুয়াল অ্যালার্ট:</b> যাচাইকৃত ভুয়া তথ্য!\n\n"
-                                        f"<b>তথ্য:</b> <i>{selected_row['text']}</i>\n"
-                                        f"<b>AI স্কোর:</b> {pkt_score}%\n"
-                                        f"<b>সিদ্ধান্ত:</b> ❌ {status}\n\n"
-                                        f"<i>#Build4Democracy #YachaiBot</i>"
-                                    )
-                                    if send_alert(alert_msg):
-                                        st.success("✅ ম্যানুয়াল অ্যালার্ট পাঠানো হয়েছে।")
-                                        st.rerun() # ম্যানুয়ালি পাঠানোর পর রিলোড
-                                    else:
-                                        st.error("❌ ম্যানুয়াল অ্যালার্ট পাঠানো ব্যর্থ হয়েছে।")
-                        
-                        else:
-                            # যদি স্ট্যাটাস "মিথ্যা" না হয় (যেমন: সত্য বা বিভ্রান্তিকর)
-                            st.success(f"✅ '{status}' হিসেবে সংরক্ষিত!")
-                            st.rerun()
-                        # ==========================================================
-                        
-                else:
-                    st.error("নির্বাচিত টেক্সটটি খুঁজে পাওয়া যায়নি। অনুগ্রহ করে রিলোড করুন।")
-
-
-    elif password != "":
-        st.sidebar.error("❌ ভুল পাসওয়ার্ড!")
-        logging.warning(f"ভুল পাসওয়ার্ড দিয়ে লগইন করার চেষ্টা। পাসওয়ার্ড: '{password}'")
+                                    st.error("❌ ম্যানুয়াল অ্যালার্ট পাঠানো ব্যর্থ হয়েছে।")
+                    
+                    else:
+                        st.success("✅ আপডেট হয়েছে!")
+                        st.rerun()
+    
+    elif password:
+        st.error("🔒 ভুল পাসওয়ার্ড।")
     else:
-        st.sidebar.info("অ্যাডমিন প্যানেল দেখতে পাসওয়ার্ড দিন।")
+        st.info("🔒 অ্যাডমিন প্যানেল দেখতে সাইডবারে পাসওয়ার্ড দিন।")
+
+# ---------- তোমার নতুন FOOTER ----------
+st.markdown("""
+<hr style='border-color:#00bfff22; margin-top: 40px;'>
+<p style='text-align:center;color:#aaaaaa;font-size:14px;'>
+Developed by <b>Team Believer</b> | Hackathon: <i>Build for Democracy 2025 🇧🇩</i>
+</p>
+""", unsafe_allow_html=True)
