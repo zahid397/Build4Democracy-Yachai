@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 import matplotlib.pyplot as plt # 👈 চার্ট লাইব্রেরি
 from fpdf import FPDF # 👈 PDF লাইব্রেরি
-import sqlite3 # 👈 তোমার ফাইনাল SQLite ইম্পোর্ট
+import sqlite3 # 👈 তোমার SQLite ইম্পোর্ট
 import shutil # 👈 তোমার ব্যাকআপ ইম্পোর্ট
 
 # --- 1. পেজ কনফিগারেশন এবং লগিং সেটআপ ---
@@ -17,7 +17,7 @@ st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প�
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
 
-# --- তোমার নতুন CSS (ভার্সন ৫.৩) ---
+# --- তোমার নতুন CSS (ভার্সন ৫.৯) ---
 st.markdown("""
 <style>
 .stApp {
@@ -29,7 +29,7 @@ h1, h2, h3 {
     text-align: center;
     font-family: 'Poppins', sans-serif;
 }
-p, label, textarea, .stMarkdown {
+p, label, .stMarkdown { /* 'textarea' এখান থেকে সরানো হয়েছে */
     color: #e0e0e0 !important;
 }
 div.stButton>button:first-child {
@@ -45,12 +45,35 @@ div.stButton>button:first-child:hover {
     background: #0096c7;
     transform: scale(1.05);
 }
+
+/* === তোমার নতুন Chat-style Text Box (v5.9) === */
 textarea {
-    background-color: rgba(255,255,255,0.08);
-    border-radius: 10px;
-    color: white !important; /* লেখা সাদা করার জন্য !important যোগ করা হলো */
+    background: rgba(255, 255, 255, 0.15); /* translucent white */
+    color: #ffffff !important; /* bright white text */
+    border-radius: 16px;
     border: 1px solid #00b4d8;
+    padding: 12px 15px;
+    font-size: 16px;
+    font-weight: 500;
+    font-family: 'Poppins', sans-serif;
+    box-shadow: 0 4px 20px rgba(0, 180, 216, 0.2); /* soft glow */
+    backdrop-filter: blur(8px); /* glassy effect */
 }
+textarea:focus {
+    outline: none;
+    border: 1.5px solid #48cae4;
+    box-shadow: 0 0 10px #00b4d8;
+}
+::placeholder {
+    color: #cce3f0 !important;
+    opacity: 0.8;
+}
+div[data-baseweb="textarea"] textarea {
+    background: rgba(20, 35, 50, 0.7);
+    color: #ffffff !important;
+}
+/* ============================================= */
+
 /* Streamlit-এর ডিফল্ট ইনফো/সাকসেস বক্সের রঙ পরিবর্তন (ঐচ্ছিক কিন্তু ভালো দেখায়) */
 .stAlert {
     border-radius: 10px;
@@ -364,7 +387,7 @@ if page == "🔍 নাগরিক পোর্টাল":
                         pass # লোগো না থাকলে সমস্যা নেই
                     
                     pdf.image(chart_path, x=40, y=pdf.get_y() + 5, w=130)
-                    pdf.set_y(pdf.get_y() + 80) # চার্টের নিচে কার্সর আনা
+                    pdf.set_y(pdf.get_y() + 80) # چار্টের নিচে কার্সর আনা
 
                     # === 1. PDF-এ টিমের নাম ===
                     pdf.set_font('Bangla', 'B', 12)
@@ -475,7 +498,7 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
                             st.write(f"AI স্কোর: **{ai_score}%** | থ্রেশহোল্ড: **{alert_threshold}%** | অটো-সেন্ড: **{auto_send}**")
                             
                             if st.button("📨 ম্যানুয়ালি অ্যালার্ট পাঠাও", key=f"manual_alert_{report_id}"):
-                                alert_msg = (
+                            alert_msg = (
                                     f"🚨 <b>ম্যানুয়াল অ্যালার্ট:</b> যাচাইকৃত ভুয়া তথ্য!\n\n"
                                     f"<b>তথ্য:</b> <i>{selected_row['text']}</i>\n"
                                     f"<b>AI স্কোর:</b> {ai_score}%\n"
@@ -485,6 +508,13 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
                                 if send_alert(alert_msg):
                                     st.success("✅ ম্যানুয়াল অ্যালার্ট পাঠানো হয়েছে।")
                                     st.rerun()
+                                else:
+                                    st.error("❌ ম্যানুয়াল অ্যালার্ট পাঠানো ব্যর্থ হয়েছে।")
+                    
+                    else:
+                        st.success("✅ আপডেট হয়েছে!")
+                        st.rerun()
+    
     elif password:
         st.error("🔒 ভুল পাসওয়ার্ড।")
     else:
