@@ -6,3 +6,5 @@ psycopg2-binary
 matplotlib
 fpdf2
 python-dotenv
+# requirements.txt
+streamlit
