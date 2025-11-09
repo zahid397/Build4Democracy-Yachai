@@ -1,8 +1,8 @@
-streamlit==1.39.0
-pandas==2.2.3
-requests==2.32.3
-google-generativeai==0.8.2
-psycopg2-binary==2.9.9
-matplotlib==3.8.2
-fpdf2==2.8.1
-python-dotenv==1.0.1
+streamlit
+pandas
+requests
+google-generativeai
+psycopg2-binary
+matplotlib
+fpdf2
+python-dotenv
