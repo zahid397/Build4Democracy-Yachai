@@ -18,20 +18,44 @@ st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প�
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
 
-# --- তোমার নতুন CSS ---
+# --- তোমার নতুন CSS (ভার্সন ৫.২) ---
 st.markdown("""
 <style>
-.stApp { background: linear-gradient(135deg,#0f2027,#203a43,#2c5364); color:#f0f0f0; }
-h1,h2,h3 { color:#00bfff !important; text-align:center; font-family:'Poppins',sans-serif; }
-div.stButton>button:first-child{background-color:#00bfff;color:white;font-weight:bold;border-radius:12px;
-border:none;padding:0.6rem 1.2rem;transition:all 0.3s ease-in-out;}
-div.stButton>button:first-child:hover{background-color:#1e90ff;transform:scale(1.05);}
-textarea{border-radius:10px !important;border:1px solid #00bfff !important;
-background-color:rgba(255,255,255,0.1) !important;color:#ffffff !important;}
-.alert{text-align:center;background-color:rgba(0,191,255,0.2);border:1px solid #00bfff;padding:10px;
-border-radius:10px;color:#aee7ff;font-weight:bold;margin-top:15px;}
-.explanation{background-color:rgba(255,255,255,0.08);border-left:4px solid #00bfff;padding:10px;
-border-radius:8px;color:#e6f9ff;font-size:15px;margin-top:10px;}
+.stApp {
+    background: linear-gradient(135deg, #0a192f, #172a45);
+    color: #f8f9fa;
+}
+h1, h2, h3 {
+    color: #48cae4 !important;
+    text-align: center;
+    font-family: 'Poppins', sans-serif;
+}
+p, label, textarea, .stMarkdown {
+    color: #e0e0e0 !important;
+}
+div.stButton>button:first-child {
+    background: #00b4d8;
+    color: white;
+    font-weight: 600;
+    border-radius: 10px;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    transition: all 0.3s ease-in-out;
+}
+div.stButton>button:first-child:hover {
+    background: #0096c7;
+    transform: scale(1.05);
+}
+textarea {
+    background-color: rgba(255,255,255,0.08);
+    border-radius: 10px;
+    color: white !important; /* লেখা সাদা করার জন্য !important যোগ করা হলো */
+    border: 1px solid #00b4d8;
+}
+/* Streamlit-এর ডিফল্ট ইনফো/সাকসেস বক্সের রঙ পরিবর্তন (ঐচ্ছিক কিন্তু ভালো দেখায়) */
+.stAlert {
+    border-radius: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -288,7 +312,7 @@ if page == "🔍 নাগরিক পোর্টাল":
 
 
                 # --- তোমার নতুন AI ব্যাখ্যা (আসল জাস্টিফিকেশন) ---
-                st.markdown(f"<div class='explanation'><b>💬 AI ব্যাখ্যা:</b> {justification}</div>", unsafe_allow_html=True)
+                st.info(f"**💬 AI ব্যাখ্যা:** {justification}")
                 st.success("✅ রিপোর্টটি আমাদের ডেটাবেসে সংরক্ষিত হয়েছে।")
 
                 # --- তোমার নতুন PDF রিপোর্ট (আসল ডেটা সহ) ---
