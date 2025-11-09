@@ -3,3 +3,4 @@ pandas
 requests
 google-generativeai
 streamlit-lottie
+psycopg2-binary
