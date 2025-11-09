@@ -7,18 +7,17 @@ import re
 import logging
 import os
 from datetime import datetime
-import psycopg2 # 👈 তোমার নতুন SQLite-এর জায়গায় ক্লাউড-রেডি Postgres
-import matplotlib.pyplot as plt # 👈 তোমার নতুন চার্ট লাইব্রেরি
-from fpdf import FPDF # 👈 তোমার নতুন PDF লাইব্রেরি
+import matplotlib.pyplot as plt # 👈 চার্ট লাইব্রেরি
+from fpdf import FPDF # 👈 PDF লাইব্রেরি
+import sqlite3 # 👈 তোমার SQLite ইম্পোর্ট
+import shutil # 👈 তোমার ব্যাকআপ ইম্পোর্ট
 
 # --- 1. পেজ কনফিগারেশন এবং লগিং সেটআপ ---
 st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প্ল্যাটফর্ম", page_icon="🧠", layout="wide")
-
-# (E) লগিং কনফিগার করা
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
 
-# --- তোমার নতুন CSS (ভার্সন ৫.২) ---
+# --- তোমার নতুন CSS (ভার্সন ৫.৩) ---
 st.markdown("""
 <style>
 .stApp {
@@ -65,29 +64,32 @@ GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")
 BOT_TOKEN = st.secrets.get("bot_token", "YOUR_BOT_TOKEN")
 CHAT_ID = st.secrets.get("chat_id", "YOUR_CHAT_ID")
 ADMIN_PASS = st.secrets.get("ADMIN_PASS", "demo123")
-DATABASE_URL = st.secrets.get("DATABASE_URL") # 👈 Neon DB-এর কানেকশন স্ট্রিং
+# DATABASE_URL -এর আর প্রয়োজন নেই
 
 # =====================================================
-# 🧱 DATABASE LAYER (Postgres / Neon)
+# 🧱 DATABASE LAYER (তোমার নতুন SQLite কোড)
 # =====================================================
+DB_PATH = "data.db"  # File stored permanently (app restarts won't delete it *on local*)
 
-@st.cache_resource # ডেটাবেস কানেকশন ক্যাশ করা
+@st.cache_resource
 def get_db_connection():
-    if not DATABASE_URL:
-        st.error("DATABASE_URL (Neon Connection String) secrets-এ সেট করা নেই।")
-        logging.error("DATABASE_URL পাওয়া যায়নি।")
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        logging.info("✅ Local SQLite database connected successfully.")
+        # স্ট্যাটাস এখন সাইডবারে দেখাবে
+        return conn
+    except Exception as e:
+        st.error(f"❌ Database connection failed: {e}")
+        logging.error(f"DB Connect Error: {e}")
         st.stop()
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
 
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-    # Postgres-এর জন্য id SERIAL PRIMARY KEY এবং timestamp TIMESTAMPTZ
     c.execute("""
         CREATE TABLE IF NOT EXISTS reports (
-            id SERIAL PRIMARY KEY,
-            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP, 
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             text TEXT,
             score INTEGER,
             verdict TEXT,
@@ -98,21 +100,26 @@ def init_db():
     conn.commit()
     c.close()
     conn.close()
+    logging.info("✅ Table 'reports' initialized successfully.")
 
 def insert_report(text, score, verdict, justification):
     conn = get_db_connection()
     c = conn.cursor()
-    # Postgres-এর জন্য %s প্লেসহোল্ডার
-    c.execute("INSERT INTO reports (text, score, verdict, justification, final_verdict) VALUES (%s, %s, %s, %s, %s)",
-              (text, score, verdict, justification, None))
+    c.execute("""
+        INSERT INTO reports (text, score, verdict, justification, final_verdict)
+        VALUES (?, ?, ?, ?, ?)
+    """, (text, score, verdict, justification, None))
     conn.commit()
     c.close()
     conn.close()
+    logging.info(f"📝 New report inserted: {verdict}")
 
-@st.cache_data(ttl=60) # ১ মিনিটের জন্য ডেটা ক্যাশ করা
+# =====================================================
+# 🧠 তোমার নতুন পার্মানেন্ট মেমোরি ক্যাশ (v5.7)
+# =====================================================
+@st.cache_data(ttl=None, persist=True)
 def fetch_all_reports():
     conn = get_db_connection()
-    # pd.read_sql সরাসরি Postgres কানেকশন হ্যান্ডেল করতে পারে
     df = pd.read_sql_query("SELECT * FROM reports ORDER BY timestamp DESC", conn)
     conn.close()
     return df
@@ -120,18 +127,17 @@ def fetch_all_reports():
 def update_verdict(report_id, verdict):
     conn = get_db_connection()
     c = conn.cursor()
-    # Postgres-এর জন্য %s প্লেসহোল্ডার
-    c.execute("UPDATE reports SET final_verdict=%s WHERE id=%s", (verdict, report_id))
+    c.execute("UPDATE reports SET final_verdict=? WHERE id=?", (verdict, report_id))
     conn.commit()
     c.close()
     conn.close()
+    logging.info(f"🔄 Verdict updated for ID {report_id}: {verdict}")
 
-# অ্যাপ চালু হলেই ডেটাবেস চেক/তৈরি করবে
+# Initialize DB on startup
 try:
     init_db()
 except Exception as e:
-    st.error(f"❌ ডেটাবেস কানেকশন ফেইল্ড! secrets.toml চেক কর।")
-    logging.error(f"DB Init Error: {e}")
+    st.error(f"❌ Database initialization error: {e}")
     st.stop()
 
 
@@ -217,6 +223,17 @@ def check_telegram_connection():
         return False
 
 # =====================================================
+# 💾 তোমার নতুন ব্যাকআপ ফাংশন (v5.6)
+# =====================================================
+def backup_database():
+    try:
+        shutil.copyfile("data.db", f"backup_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+        st.sidebar.info("💾 Backup created successfully!")
+    except Exception as e:
+        st.sidebar.error(f"Backup failed: {e}")
+
+
+# =====================================================
 # 🎨 ANIMATIONS (লটি লোডার)
 # =====================================================
 @st.cache_data
@@ -244,6 +261,7 @@ except:
 
 st.sidebar.markdown("### 🤖 YachaiFactBot")
 st.sidebar.markdown("_Uncover the truth, one fact at a time._")
+st.sidebar.success("🧠 Persistent Memory Active (SQLite)") # তোমার নতুন DB স্ট্যাটাস
 st.sidebar.markdown("---")
 
 page = st.sidebar.radio("নেভিগেশন", ["🔍 নাগরিক পোর্টাল", "🧑‍💼 অ্যাডমিন প্যানেল"])
@@ -387,15 +405,21 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
             st.write("**BOT_TOKEN:**", "✅ লোড হয়েছে" if BOT_TOKEN and ":" in BOT_TOKEN else "❌ নেই")
             chat_id_check = CHAT_ID and (CHAT_ID.isdigit() or (CHAT_ID.startswith("-") and CHAT_ID[1:].isdigit()))
             st.write("**CHAT_ID:**", f"✅ {CHAT_ID}" if chat_id_check else "❌ নেই")
-            st.write("**DATABASE_URL:**", "✅ লোড হয়েছে" if DATABASE_URL and "postgres" in DATABASE_URL else "❌ নেই")
+            # ডিবাগ প্যানেলে ডেটাবেস স্ট্যাটাস (SQLite)
+            st.write("**DATABASE:**", "✅ SQLite (Local)")
+            
             if st.sidebar.button("📲 Test Telegram Alert (Debug)"):
                 send_alert("🧪 Debug: YachaiBot test alert — সিক্রেট যাচাই সফল!")
         
         st.sidebar.markdown("---")
-        if st.sidebar.button("🔄 ডেটা রিলোড করুন"):
+        # --- নতুন ব্যাকআপ এবং রিলোড বাটন (v5.6) ---
+        col1, col2 = st.sidebar.columns(2)
+        if col1.button("🔄 ডেটা রিলোড করুন"):
             st.cache_data.clear()
             st.rerun()
-
+        if col2.button("💾 ডেটাবেস ব্যাকআপ"):
+            backup_database() # তোমার নতুন ফাংশন কল
+        
         # --- অ্যাডমিন ড্যাশবোর্ড ---
         st.title("🧑‍💼 Admin Dashboard")
         
@@ -464,7 +488,6 @@ elif page == "🧑‍💼 অ্যাডমিন প্যানেল":
                                     st.rerun()
                                 else:
                                     st.error("❌ ম্যানুয়াল অ্যালার্ট পাঠানো ব্যর্থ হয়েছে।")
-                    
                     else:
                         st.success("✅ আপডেট হয়েছে!")
                         st.rerun()
