@@ -17,67 +17,62 @@ st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প�
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
 
-# --- তোমার নতুন CSS (ভার্সন ৫.৯) ---
+# --- তোমার নতুন MS Word-style CSS (ভার্সন ৬.০) ---
 st.markdown("""
 <style>
+/* পুরো ব্যাকগ্রাউন্ড হালকা সাদা, MS Word-এর মতো */
 .stApp {
-    background: linear-gradient(135deg, #0a192f, #172a45);
-    color: #f8f9fa;
-}
-h1, h2, h3 {
-    color: #48cae4 !important;
-    text-align: center;
-    font-family: 'Poppins', sans-serif;
-}
-p, label, .stMarkdown { /* 'textarea' এখান থেকে সরানো হয়েছে */
-    color: #e0e0e0 !important;
-}
-div.stButton>button:first-child {
-    background: #00b4d8;
-    color: white;
-    font-weight: 600;
-    border-radius: 10px;
-    border: none;
-    padding: 0.6rem 1.2rem;
-    transition: all 0.3s ease-in-out;
-}
-div.stButton>button:first-child:hover {
-    background: #0096c7;
-    transform: scale(1.05);
+    background-color: #f4f6fa !important;
+    color: #111 !important;
+    font-family: "Segoe UI", "Calibri", sans-serif !important;
 }
 
-/* === তোমার নতুন Chat-style Text Box (v5.9) === */
-textarea {
-    background: rgba(255, 255, 255, 0.15); /* translucent white */
-    color: #ffffff !important; /* bright white text */
-    border-radius: 16px;
-    border: 1px solid #00b4d8;
-    padding: 12px 15px;
-    font-size: 16px;
-    font-weight: 500;
-    font-family: 'Poppins', sans-serif;
-    box-shadow: 0 4px 20px rgba(0, 180, 216, 0.2); /* soft glow */
-    backdrop-filter: blur(8px); /* glassy effect */
+/* টেক্সট বক্স বা ইনপুট এরিয়া */
+textarea, input[type="text"], input[type="search"] {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 6px !important;
+    font-size: 16px !important;
+    padding: 8px 10px !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
-textarea:focus {
-    outline: none;
-    border: 1.5px solid #48cae4;
-    box-shadow: 0 0 10px #00b4d8;
-}
-::placeholder {
-    color: #cce3f0 !important;
-    opacity: 0.8;
-}
-div[data-baseweb="textarea"] textarea {
-    background: rgba(20, 35, 50, 0.7);
-    color: #ffffff !important;
-}
-/* ============================================= */
 
-/* Streamlit-এর ডিফল্ট ইনফো/সাকসেস বক্সের রঙ পরিবর্তন (ঐচ্ছিক কিন্তু ভালো দেখায়) */
-.stAlert {
-    border-radius: 10px;
+/* placeholder text হালকা গ্রে */
+textarea::placeholder, input::placeholder {
+    color: #7a7a7a !important;
 }
+
+/* টাইটেল, হেডার ইত্যাদি Word-স্টাইল */
+h1, h2, h3, h4 {
+    color: #1d3557 !important;
+    font-weight: 600 !important;
+    text-align: center; /* আগের ভার্সন থেকে এটা রাখা ভালো */
+}
+
+/* বাটনগুলোকে Word-এর মতো সিম্পল করে দেই */
+button[kind="primary"] {
+    background-color: #2563eb !important;
+    color: white !important;
+    border-radius: 6px !important;
+    padding: 6px 14px !important;
+    border: none !important;
+    transition: background 0.2s ease-in-out;
+}
+button[kind="primary"]:hover {
+    background-color: #1e40af !important;
+}
+
+/* আউটপুট কার্ড (যেমন verdict box) */
+.stMarkdown, .stAlert, .stDataFrame {
+    background-color: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
+    padding: 10px 14px !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+/* আগের CSS থেকে চার্টের লেখা সাদা রাখার কোডটি বাদ দেওয়া হলো, কারণ ব্যাকগ্রাউন্ড এখন সাদা */
 </style>
 """, unsafe_allow_html=True)
 
@@ -298,8 +293,8 @@ if page == "🔍 নাগরিক পোর্টাল":
     # --- তোমার নতুন হেডার ---
     st.markdown("""
     <h1>🧠 YachaiFactBot</h1>
-    <p style='text-align:center;color:#cccccc;'>AI-চালিত তথ্য যাচাই এবং টেলিগ্রাম অ্যালার্ট সিস্টেম 🇧🇩</p>
-    """, unsafe_allow_html=True)
+    <p style='text-align:center;color:#444;'>AI-চালিত তথ্য যাচাই এবং টেলিগ্রাম অ্যালার্ট সিস্টেম 🇧🇩</p>
+    """, unsafe_allow_html=True) # <-- হালকা গ্রে রঙ
 
     # === 4. তোমার নতুন Intro Text ===
     st.markdown("> “An AI-driven fact-verification platform for citizens of Bangladesh — powered by Gemini Pro & Team Believer.”")
@@ -341,8 +336,8 @@ if page == "🔍 নাগরিক পোর্টাল":
                 ax.bar(data['Category'], data['Score'], color=['#00bfff','#ff4d4d'])
                 ax.set_ylim(0,100)
                 ax.set_ylabel('Confidence %')
-                ax.set_title('AI Confidence Meter', color='white')
-                ax.tick_params(colors='white') # অক্ষের রঙ
+                ax.set_title('AI Confidence Meter', color='#1d3557') # <-- হেডার কালার
+                ax.tick_params(colors='#111') # <-- টেক্সট কালার
                 fig.patch.set_alpha(0) # চার্টের الخلفية স্বচ্ছ করা
                 ax.set_facecolor('none') # অক্ষের الخلفية স্বচ্ছ করা
                 st.pyplot(fig)
