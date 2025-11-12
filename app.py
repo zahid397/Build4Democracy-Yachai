@@ -17,18 +17,6 @@ st.set_page_config(page_title="YachaiFactBot - তথ্য যাচাই প�
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.info("অ্যাপ্লিকেশন শুরু হয়েছে।")
 
-# =====================================================
-# === 🐞 তোমার নতুন ডিবাগ প্যানেল (v6.1) ===
-# =====================================================
-st.write("--- 🐞 সিক্রেট লোডিং স্ট্যাটাস (DEBUGGER) ---")
-st.write("Loaded `bot_token`?", bool(st.secrets.get("bot_token")))
-st.write("Loaded `GEMINI_API_KEY`?", bool(st.secrets.get("GEMINI_API_KEY")))
-st.write("Loaded `chat_id`?", bool(st.secrets.get("chat_id")))
-st.write("Loaded `ADMIN_PASS`?", bool(st.secrets.get("ADMIN_PASS")))
-st.write("--- END DEBUGGER ---")
-# =====================================================
-
-
 # --- তোমার নতুন MS Word-style CSS (ভার্সন ৬.০) ---
 st.markdown("""
 <style>
@@ -91,7 +79,7 @@ button[kind="primary"]:hover {
 
 # --- 2. সিক্রেট এবং API কী লোড ---
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_KEY")
-BOT_TOKEN = st.secrets.get("bot_token", "YOUR_BOT_TOKEN") 
+BOT_TOKEN = st.secrets.get("bot_token", "YOUR_BOT_TOKEN") # <-- ⚠️⚠️⚠️ এখানে তোমার নতুন (রিভোক করা) টোকেনটি secrets.toml ফাইলে রাখো
 CHAT_ID = st.secrets.get("chat_id", "YOUR_CHAT_ID")
 ADMIN_PASS = st.secrets.get("ADMIN_PASS", "demo123")
 
@@ -224,7 +212,8 @@ def get_gemini_analysis(text_to_analyze):
 # =====================================================
 def send_alert(message):
     try:
-        url = f"https.api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        # === 🐞 বাগ ফিক্স (v6.2): https:// যোগ করা হয়েছে ===
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"} # HTML পার্স মোড
         res = requests.post(url, data=payload, timeout=10)
         return res.status_code == 200
@@ -237,7 +226,8 @@ def check_telegram_connection():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN":
         st.sidebar.error("❌ Telegram Token নেই।")
         return False
-    url = f"https.api.telegram.org/bot{BOT_TOKEN}/getMe"
+    # === 🐞 বাগ ফিক্স (v6.2): https:// যোগ করা হয়েছে ===
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getMe"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
