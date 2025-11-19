@@ -1,60 +1,59 @@
 import os
 import telebot
 import google.generativeai as genai
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# 🔐 Environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# 🔐 API Keys
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# ❗ Safety check
+if not GEMINI_API_KEY or not TELEGRAM_BOT_TOKEN:
+    raise Exception("❌ Missing environment variables! Please set GEMINI_API_KEY and TELEGRAM_BOT_TOKEN.")
 
-# ✅ Configure Gemini AI
+# 🤖 Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-pro")
 
-# 🤖 Initialize Telegram Bot
+# 💬 Initialize Telegram Bot
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 # 🧠 /start command
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+@bot.message_handler(commands=["start"])
+def start(message):
     bot.reply_to(
         message,
-        "👋 স্বাগতম যাচাই (Yachai) - তোমার AI Fact Checking সহকারী!\n\n"
-        "🧠 আমি যেকোনো তথ্য বিশ্লেষণ করে সত্যতা যাচাই করতে পারি।\n"
-        "📩 শুধু মেসেজে লিখো — যেমন:\n"
-        "'বাংলাদেশে ভোট স্থগিত হয়েছে কি সত্যি?'"
+        "👋 স্বাগতম যাচাই (Yachai) — তোমার AI Fact-Checking সহকারী!\n\n"
+        "🔎 যেকোনো খবর / পোস্ট / দাবি পাঠাও — আমি সত্যতা বিশ্লেষণ করে দিবো।"
     )
 
-# 🔍 Handle user message
-@bot.message_handler(func=lambda message: True)
-def fact_check(message):
-    user_text = message.text.strip()
-    bot.send_chat_action(message.chat.id, 'typing')
+# 📌 Handle user message
+@bot.message_handler(func=lambda msg: True)
+def check_fact(message):
+    text = message.text.strip()
+    bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        # ChatGPT-style intelligent prompt
         prompt = f"""
-        তুমি একজন বাংলা ভাষায় কথা বলা fact-checking সহকারী।
-        নিচের বক্তব্য বিশ্লেষণ করো এবং সংক্ষিপ্তভাবে সত্যতা যাচাই করো।
-        ব্যবহারকারী জিজ্ঞেস করেছে:
-        "{user_text}"
+তুমি একজন বাংলা fact-checking সহকারী।
+নিচের বক্তব্য সত্য নাকি মিথ্যা তা বিশ্লেষণ করো।
 
-        🔹 Verdict: (সত্য / মিথ্যা / বিভ্রান্তিকর)
-        🔹 বিশ্লেষণ:
-        """
+বক্তব্য:
+{text}
+
+ফরম্যাট:
+- Verdict: (সত্য / মিথ্যা / বিভ্রান্তিকর)
+- বিশ্লেষণ:
+"""
 
         response = model.generate_content(prompt)
-        result = response.text if response else "দুঃখিত, আমি এখন যাচাই করতে পারছি না।"
+        result = response.text if response else "দুঃখিত, আমি যাচাই করতে পারছি না।"
 
-        bot.reply_to(message, f"✅ যাচাই ফলাফল:\n\n{result}")
+        bot.reply_to(message, f"🧾 Fact-Check Result:\n\n{result}")
 
     except Exception as e:
-        bot.reply_to(message, f"⚠️ ত্রুটি ঘটেছে:\n{str(e)}")
+        bot.reply_to(message, f"⚠️ ত্রুটি ঘটেছে: {str(e)}")
 
-# 🚀 Run bot
+# 🚀 Run bot (Always active)
 if __name__ == "__main__":
-    print("🤖 Yachai Telegram Bot is running...")
-    bot.polling(non_stop=True)
+    print("🤖 Yachai Telegram Bot is running on Railway...")
+    bot.polling(non_stop=True, timeout=90)
